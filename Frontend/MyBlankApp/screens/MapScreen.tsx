@@ -1,5 +1,5 @@
 // screens/MapScreen.tsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,19 +9,21 @@ import {
   TouchableOpacity,
   Linking,
   Dimensions,
-  Alert,
   Platform,
+  Animated,
+  PanResponder,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import * as Location from "expo-location";
+import { useAudioPlayer } from "expo-audio";
 import axios from "axios";
 import Navbar from "../components/Navbar";
 
-// react-native-maps is native-only; use require() so web bundler never imports it
 const isWeb = Platform.OS === "web";
 let MapView: any, Marker: any, Circle: any, Polyline: any, PROVIDER_DEFAULT: any;
 if (!isWeb) {
-  const Maps = require("react-native-maps");
+  const Maps   = require("react-native-maps");
   MapView          = Maps.default;
   Marker           = Maps.Marker;
   Circle           = Maps.Circle;
@@ -32,868 +34,641 @@ if (!isWeb) {
 const DANGER_API    = "https://sentinel-shield-m-indicator-hacks.onrender.com/danger-status";
 const DANGER_RADIUS = 2000;
 const { height: SH } = Dimensions.get("window");
+const SHEET_HEIGHT   = SH * 0.50;
+const NAVBAR_H       = 72;
 
-// Dark theme map style (Uber/Ola inspired)
+// ── Dark map style ─────────────────────────────────────────────────────────
 const DARK_MAP_STYLE = [
-  { elementType: "geometry", stylers: [{ color: "#1a1a2e" }] },
-  { elementType: "labels.text.stroke", stylers: [{ color: "#1a1a2e" }] },
-  { elementType: "labels.text.fill", stylers: [{ color: "#8b92ab" }] },
-  {
-    featureType: "administrative.locality",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#c5cae9" }],
-  },
-  {
-    featureType: "poi",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#6b7a99" }],
-  },
-  {
-    featureType: "poi.park",
-    elementType: "geometry",
-    stylers: [{ color: "#1e3a3a" }],
-  },
-  {
-    featureType: "poi.park",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#4a7c59" }],
-  },
-  {
-    featureType: "road",
-    elementType: "geometry",
-    stylers: [{ color: "#2c3e50" }],
-  },
-  {
-    featureType: "road",
-    elementType: "geometry.stroke",
-    stylers: [{ color: "#1a252f" }],
-  },
-  {
-    featureType: "road",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#9ca5b3" }],
-  },
-  {
-    featureType: "road.highway",
-    elementType: "geometry",
-    stylers: [{ color: "#34495e" }],
-  },
-  {
-    featureType: "road.highway",
-    elementType: "geometry.stroke",
-    stylers: [{ color: "#1f2c3a" }],
-  },
-  {
-    featureType: "road.highway",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#b0bec5" }],
-  },
-  {
-    featureType: "transit",
-    elementType: "geometry",
-    stylers: [{ color: "#2c3e50" }],
-  },
-  {
-    featureType: "transit.station",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#7986cb" }],
-  },
-  {
-    featureType: "water",
-    elementType: "geometry",
-    stylers: [{ color: "#0f1419" }],
-  },
-  {
-    featureType: "water",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#3d5a80" }],
-  },
-  {
-    featureType: "water",
-    elementType: "labels.text.stroke",
-    stylers: [{ color: "#0f1419" }],
-  },
+  { elementType: "geometry",              stylers: [{ color: "#1a1a2e" }] },
+  { elementType: "labels.text.stroke",    stylers: [{ color: "#1a1a2e" }] },
+  { elementType: "labels.text.fill",      stylers: [{ color: "#8b92ab" }] },
+  { featureType: "administrative.locality", elementType: "labels.text.fill", stylers: [{ color: "#c5cae9" }] },
+  { featureType: "poi",                   elementType: "labels.text.fill",   stylers: [{ color: "#6b7a99" }] },
+  { featureType: "poi.park",              elementType: "geometry",           stylers: [{ color: "#1e3a3a" }] },
+  { featureType: "poi.park",              elementType: "labels.text.fill",   stylers: [{ color: "#4a7c59" }] },
+  { featureType: "road",                  elementType: "geometry",           stylers: [{ color: "#2c3e50" }] },
+  { featureType: "road",                  elementType: "geometry.stroke",    stylers: [{ color: "#1a252f" }] },
+  { featureType: "road",                  elementType: "labels.text.fill",   stylers: [{ color: "#9ca5b3" }] },
+  { featureType: "road.highway",          elementType: "geometry",           stylers: [{ color: "#34495e" }] },
+  { featureType: "road.highway",          elementType: "geometry.stroke",    stylers: [{ color: "#1f2c3a" }] },
+  { featureType: "road.highway",          elementType: "labels.text.fill",   stylers: [{ color: "#b0bec5" }] },
+  { featureType: "transit",               elementType: "geometry",           stylers: [{ color: "#2c3e50" }] },
+  { featureType: "transit.station",       elementType: "labels.text.fill",   stylers: [{ color: "#7986cb" }] },
+  { featureType: "water",                 elementType: "geometry",           stylers: [{ color: "#0f1419" }] },
+  { featureType: "water",                 elementType: "labels.text.fill",   stylers: [{ color: "#3d5a80" }] },
+  { featureType: "water",                 elementType: "labels.text.stroke", stylers: [{ color: "#0f1419" }] },
 ];
 
 const EMERGENCY_CONTACTS = [
-  { id: "1", label: "Ambulance",      number: "102",  color: "#FF3B30" },
-  { id: "2", label: "Police",         number: "100",  color: "#007AFF" },
-  { id: "3", label: "Disaster Mgmt",  number: "108",  color: "#FF9500" },
-  { id: "4", label: "Women Helpline", number: "1091", color: "#AF52DE" },
-  { id: "5", label: "Fire Brigade",   number: "101",  color: "#FF6B35" },
-  { id: "6", label: "Accident Report",number: "1073", color: "#34C759" },
+  { id: "1", label: "Ambulance",        number: "102",  color: "#FF3B30" },
+  { id: "2", label: "Police",           number: "100",  color: "#1C1C1E" },
+  { id: "3", label: "Disaster Mgmt",    number: "108",  color: "#FF9500" },
+  { id: "4", label: "Women Helpline",   number: "1091", color: "#AF52DE" },
+  { id: "5", label: "Fire Brigade",     number: "101",  color: "#FF6B35" },
+  { id: "6", label: "Accident Report",  number: "1073", color: "#34C759" },
 ];
 
-interface Place { id: string; name: string; lat: number; lon: number; }
+type PlaceType = "hospital" | "police";
+interface Place { id: string; name: string; lat: number; lon: number; type: PlaceType; }
 
-const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-  const R = 6371000; // meters
+const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R    = 6371000;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
+const placeColor = (t: PlaceType) => (t === "hospital" ? "#FF3B30" : "#1C1C1E");
+const placeLabel = (t: PlaceType) => (t === "hospital" ? "Hospital"       : "Police Stn");
+const fmtDist    = (m: number)     => (m < 1000       ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`);
+
+// ────────────────────────────────────────────────────────────────────────────
 export default function MapScreen() {
-  const [location,  setLocation]  = useState<{ latitude: number; longitude: number } | null>(null);
-  const [danger,    setDanger]    = useState(false);
-  const [places,    setPlaces]    = useState<Place[]>([]);
-  const [loading,   setLoading]   = useState(true);
-  const [activeTab, setActiveTab] = useState<"hospitals" | "contacts">("hospitals");
-  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
-  const [safePlace, setSafePlace] = useState<Place | null>(null);
-  const [isNavigating, setIsNavigating] = useState(false);
-  const mapRef = useRef<MapView>(null);
+  const [location,      setLocation]      = useState<{ latitude: number; longitude: number } | null>(null);
+  const [danger,        setDanger]        = useState(false);
+  const [places,        setPlaces]        = useState<Place[]>([]);
+  const [loading,       setLoading]       = useState(true);
+  const [activeTab,     setActiveTab]     = useState<"nearby" | "contacts">("nearby");
+  const [routeCoords,   setRouteCoords]   = useState<{ latitude: number; longitude: number }[]>([]);
+  const [waypoints,     setWaypoints]     = useState<{ latitude: number; longitude: number }[]>([]);
+  const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
+  const [sheetOpen,     setSheetOpen]     = useState(false);
 
-  // Fetch danger status every 3s
+  const mapRef     = useRef<any>(null);
+  // Sheet slides in from bottom: translateY goes from SHEET_HEIGHT (hidden) → 0 (visible)
+  const sheetTransY = useRef(new Animated.Value(SHEET_HEIGHT)).current;
+  const pulseAnim   = useRef(new Animated.Value(1)).current;
+  const sheetOpenRef = useRef(false); // ref mirror so PanResponder can read it sync
+
+  // ── expo-audio ─────────────────────────────────────────────────────────
+  const player = useAudioPlayer(require("../assets/alert.mp3"));
+
+  const startSiren = useCallback(() => {
+    try { player.loop = true; player.play(); }
+    catch (e) { console.log("siren:", e); }
+  }, [player]);
+
+  const stopSiren = useCallback(() => {
+    try { player.pause(); player.seekTo(0); }
+    catch (e) { console.log("siren stop:", e); }
+  }, [player]);
+
+  // ── Collapse sheet on screen blur ──────────────────────────────────────
+  useFocusEffect(
+    useCallback(() => {
+      return () => closeSheet();
+    }, [])
+  );
+
+  // ── Danger pulse animation ──────────────────────────────────────────────
   useEffect(() => {
-    const interval = setInterval(async () => {
+    if (danger) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.14, duration: 600, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1,    duration: 600, useNativeDriver: true }),
+        ])
+      ).start();
+    } else {
+      pulseAnim.stopAnimation();
+      pulseAnim.setValue(1);
+    }
+  }, [danger]);
+
+  // ── Danger poll every 3 s ──────────────────────────────────────────────
+  useEffect(() => {
+    const poll = async () => {
       try {
-        const res = await axios.get(DANGER_API);
-        const isDanger = res.data.danger_zone;
-        setDanger(isDanger);
-        
-        // If danger activated and we have location, calculate route
-        if (isDanger && location && places.length > 0) {
-          calculateEvacuationRoute();
-        } else if (!isDanger) {
-          setRouteCoords([]);
-          setSafePlace(null);
-        }
+        const res      = await axios.get(DANGER_API);
+        const isDanger = !!res.data.danger_zone;
+        setDanger((prev) => {
+          if (isDanger && !prev) startSiren();
+          if (!isDanger && prev) { stopSiren(); setRouteCoords([]); setSelectedPlace(null); }
+          return isDanger;
+        });
       } catch { /* silent */ }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [location, places]);
+    };
+    poll();
+    const id = setInterval(poll, 3000);
+    return () => clearInterval(id);
+  }, [startSiren, stopSiren]);
 
-  // Get location + hospitals/shelters once + start live tracking
+  // ── Location + places ──────────────────────────────────────────────────
   useEffect(() => {
-    let locationSubscription: any;
-    
+    let sub: any;
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") return;
+      if (status !== "granted") { setLoading(false); return; }
 
       const loc    = await Location.getCurrentPositionAsync({});
       const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       setLocation(coords);
 
-      // Start live location tracking
-      locationSubscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 3000,
-          distanceInterval: 10,
-        },
-        (newLocation) => {
-          const newCoords = {
-            latitude: newLocation.coords.latitude,
-            longitude: newLocation.coords.longitude,
-          };
-          setLocation(newCoords);
-          
-          // Update map camera if navigating
-          if (isNavigating && mapRef.current) {
-            mapRef.current.animateCamera({
-              center: newCoords,
-              zoom: 16,
-            }, { duration: 1000 });
-          }
-        }
+      sub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, timeInterval: 4000, distanceInterval: 15 },
+        (l) => setLocation({ latitude: l.coords.latitude, longitude: l.coords.longitude })
       );
 
-      try {
-        const query = `[out:json][timeout:25];
-(
-  node["amenity"="hospital"](around:15000,${coords.latitude},${coords.longitude});
-  node["amenity"="shelter"](around:15000,${coords.latitude},${coords.longitude});
-  way["amenity"="hospital"](around:15000,${coords.latitude},${coords.longitude});
-  way["amenity"="shelter"](around:15000,${coords.latitude},${coords.longitude});
-);
-out center;`;
-
-        const res = await axios.post("https://overpass-api.de/api/interpreter", query, {
-          headers: { "Content-Type": "text/plain" },
-        });
-
-        const processed = res.data.elements
-          .map((el: any) => {
-            const hlat = el.lat || el.center?.lat;
-            const hlon = el.lon || el.center?.lon;
-            if (!hlat || !hlon) return null;
-
-            const amenity = el.tags?.amenity || "unknown";
-            let name = el.tags?.name || "";
-            if (!name) {
-              name = amenity === "hospital" ? "Nearby Hospital" : "Safe Shelter / Basement";
-            }
-
-            return {
-              id: el.id.toString(),
-              name,
-              lat: hlat,
-              lon: hlon,
-            } as Place;
-          })
-          .filter(Boolean) as Place[];
-
-        // Sort by real distance to user (nearest first)
-        processed.sort((a, b) =>
-          getDistance(coords.latitude, coords.longitude, a.lat, a.lon) -
-          getDistance(coords.latitude, coords.longitude, b.lat, b.lon)
-        );
-
-        setPlaces(processed.slice(0, 5));
-      } catch {
-        /* silent - places remains empty → map will use generic safe point */
-      } finally {
-        setLoading(false);
-      }
+      await fetchNearby(coords.latitude, coords.longitude);
+      setLoading(false);
     })();
+    return () => sub?.remove();
+  }, []);
 
-    return () => {
-      if (locationSubscription) {
-        locationSubscription.remove();
-      }
-    };
-  }, [isNavigating]);
+  // ── Nominatim OSM (no 406 issues) ─────────────────────────────────────
+  const fetchNearby = async (lat: number, lon: number) => {
+    const d   = 0.10;
+    const box = `${lon - d},${lat - d},${lon + d},${lat + d}`;
+    const BASE = "https://nominatim.openstreetmap.org/search";
+    const HDRS = { "User-Agent": "SentinelShield/1.0 (safety-app)" };
+    const TYPES: Array<{ amenity: string; type: PlaceType; fallback: string }> = [
+      { amenity: "hospital",     type: "hospital", fallback: "Hospital"       },
+      { amenity: "clinic",       type: "hospital", fallback: "Clinic"         },
+      { amenity: "police",       type: "police",   fallback: "Police Station" },
+      { amenity: "fire_station", type: "police",   fallback: "Fire Station"   },
+    ];
 
-  const openNavigation = (lat: number, lon: number, name: string) => {
-    // Show route on map and enable live navigation
-    if (location) {
-      setIsNavigating(true);
-      fetchRoute(location.latitude, location.longitude, lat, lon);
-      setSafePlace({ id: 'selected', name, lat, lon });
-      
-      // Fit map to show both points
-      if (mapRef.current) {
-        mapRef.current.fitToCoordinates(
-          [location, { latitude: lat, longitude: lon }],
-          {
-            edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-            animated: true
-          }
-        );
-      }
-    }
-  };
-
-  const callNumber = (number: string) =>
-    Linking.openURL(`tel:${number}`);
-
-  // Find nearest safe place outside danger zone
-  const findNearestSafePlace = () => {
-    if (!location || places.length === 0) return null;
-    
-    let nearest = null;
-    let minDist = Infinity;
-
-    for (let p of places) {
-      const distToUser = getDistance(location.latitude, location.longitude, p.lat, p.lon);
-      const distToCenter = getDistance(location.latitude, location.longitude, p.lat, p.lon);
-      
-      if (distToCenter > DANGER_RADIUS + 100 && distToUser < minDist) {
-        minDist = distToUser;
-        nearest = p;
-      }
-    }
-    return nearest;
-  };
-
-  // Calculate evacuation route using OSRM
-  const calculateEvacuationRoute = async () => {
-    if (!location) return;
-
-    const nearestSafe = findNearestSafePlace();
-    if (!nearestSafe) {
-      // Fallback: calculate exit point
-      const exitPoint = getSafeExitPoint(location.latitude, location.longitude);
-      setSafePlace({ id: 'exit', name: 'Safe Exit Point', lat: exitPoint.lat, lon: exitPoint.lon });
-      await fetchRoute(location.latitude, location.longitude, exitPoint.lat, exitPoint.lon);
-      return;
-    }
-
-    setSafePlace(nearestSafe);
-    await fetchRoute(location.latitude, location.longitude, nearestSafe.lat, nearestSafe.lon);
-  };
-
-  // Get safe exit point (fallback when no hospitals found)
-  const getSafeExitPoint = (userLat: number, userLon: number) => {
-    const dLat = userLat - location!.latitude;
-    const dLon = userLon - location!.longitude;
-    let len = Math.sqrt(dLat * dLat + dLon * dLon);
-
-    if (len === 0) { len = 1; }
-
-    const nLat = dLat / len;
-    const nLon = dLon / len;
-    const exitDistDeg = (DANGER_RADIUS + 300) / 111320;
-
-    return {
-      lat: location!.latitude + nLat * exitDistDeg,
-      lon: location!.longitude + nLon * exitDistDeg * (1 / Math.cos(location!.latitude * Math.PI / 180))
-    };
-  };
-
-  // Fetch route from OSRM
-  const fetchRoute = async (fromLat: number, fromLon: number, toLat: number, toLon: number) => {
     try {
-      const url = `https://router.project-osrm.org/route/v1/foot/${fromLon},${fromLat};${toLon},${toLat}?overview=full&geometries=geojson`;
-      const res = await axios.get(url);
-      
-      if (res.data.routes && res.data.routes.length > 0) {
-        const coords = res.data.routes[0].geometry.coordinates.map((c: number[]) => ({
-          latitude: c[1],
-          longitude: c[0]
+      const results = await Promise.allSettled(
+        TYPES.map(({ amenity, type, fallback }) =>
+          axios.get(BASE, {
+            params: { amenity, format: "json", limit: 10, bounded: 1, viewbox: box },
+            headers: HDRS,
+            timeout: 12000,
+          }).then((res) =>
+            (res.data as any[]).map((el): Place => ({
+              id:   `${amenity}-${el.osm_id}`,
+              name: (el.display_name?.split(",")[0] || fallback).trim(),
+              lat:  parseFloat(el.lat),
+              lon:  parseFloat(el.lon),
+              type,
+            }))
+          )
+        )
+      );
+
+      const all: Place[] = results.flatMap((r) => r.status === "fulfilled" ? r.value : []);
+
+      const seen  = new Set<string>();
+      const dedup = all.filter((p) => {
+        const key = `${p.lat.toFixed(4)},${p.lon.toFixed(4)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      dedup.sort((a, b) => getDistance(lat, lon, a.lat, a.lon) - getDistance(lat, lon, b.lat, b.lon));
+      setPlaces(dedup.slice(0, 10));
+      console.log(`Nominatim: ${all.length} raw → ${dedup.length} dedup → ${Math.min(dedup.length, 10)} shown`);
+    } catch (e: any) {
+      console.log("Nominatim error:", e?.response?.status, e?.message);
+    }
+  };
+
+  // ── OSRM route ────────────────────────────────────────────────────────
+  const navigateTo = async (place: Place) => {
+    if (!location) return;
+    setSelectedPlace(place);
+    setRouteCoords([]);
+    setWaypoints([]);
+
+    try {
+      const url =
+        `https://router.project-osrm.org/route/v1/driving/` +
+        `${location.longitude},${location.latitude};${place.lon},${place.lat}` +
+        `?overview=full&geometries=geojson&steps=true`;
+      const res = await axios.get(url, { timeout: 12000 });
+
+      if (res.data.routes?.length) {
+        const route  = res.data.routes[0];
+        const coords = route.geometry.coordinates.map((c: number[]) => ({
+          latitude: c[1], longitude: c[0],
         }));
         setRouteCoords(coords);
 
-        // Fit map to show route
-        if (mapRef.current && coords.length > 0) {
-          mapRef.current.fitToCoordinates(coords, {
-            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-            animated: true
-          });
-        }
+        const wps: { latitude: number; longitude: number }[] = [];
+        (route.legs?.[0]?.steps ?? []).forEach((step: any) => {
+          const loc = step.maneuver?.location;
+          if (loc) wps.push({ longitude: loc[0], latitude: loc[1] });
+        });
+        setWaypoints(wps);
+
+        mapRef.current?.fitToCoordinates(coords, {
+          edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
+          animated: true,
+        });
       }
-    } catch (error) {
-      console.log('Route fetch error:', error);
-    }
+    } catch (e) { console.log("Route error:", e); }
   };
 
-  // ── Web fallback ────────────────────────────────────────────────────────────
-  if (isWeb) {
-    return (
-      <SafeAreaView style={s.root}>
-        <View style={[s.mapWrap, { justifyContent: "center", alignItems: "center" }]}>
-          <Text style={{ fontSize: 40, marginBottom: 16 }}>🗺️</Text>
-          <Text style={{ color: "#8b92ab", fontSize: 16, fontWeight: "600" }}>
-            Map not available on web
-          </Text>
-          <Text style={{ color: "#555e7a", fontSize: 13, marginTop: 6 }}>
-            Open the app in Expo Go to view the live map
-          </Text>
-        </View>
+  const clearRoute = () => { setSelectedPlace(null); setRouteCoords([]); setWaypoints([]); };
 
-        {/* BOTTOM PANEL — still usable on web */}
-        <View style={s.panel}>
-          <View style={s.tabBar}>
-            <TouchableOpacity
-              onPress={() => setActiveTab("hospitals")}
-              style={[s.tabBtn, activeTab === "hospitals" && s.tabBtnOn]}
-            >
-              <Text style={[s.tabTxt, activeTab === "hospitals" && s.tabTxtOn]}>
-                Safe Locations
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setActiveTab("contacts")}
-              style={[s.tabBtn, activeTab === "contacts" && s.tabBtnOn]}
-            >
-              <Text style={[s.tabTxt, activeTab === "contacts" && s.tabTxtOn]}>
-                Emergency Contacts
-              </Text>
-            </TouchableOpacity>
-          </View>
+  // ── Sheet open / close helpers ─────────────────────────────────────────
+  const openSheet = () => {
+    sheetOpenRef.current = true;
+    setSheetOpen(true);
+    Animated.spring(sheetTransY, {
+      toValue: 0, useNativeDriver: true, bounciness: 4,
+    }).start();
+  };
 
-          {activeTab === "contacts" && (
-            <ScrollView showsVerticalScrollIndicator={false}>
-              {EMERGENCY_CONTACTS.map((c) => (
-                <View key={c.id} style={s.row}>
-                  <View style={s.rowL}>
-                    <View style={[s.iconBox, { backgroundColor: c.color + "15" }]}>
-                      <View style={[s.iconDot, { backgroundColor: c.color }]} />
-                    </View>
-                    <View style={s.rowMid}>
-                      <Text style={s.rowTitle}>{c.label}</Text>
-                      <Text style={[s.rowSub, { color: c.color, fontWeight: "600" }]}>{c.number}</Text>
-                    </View>
-                  </View>
-                  <TouchableOpacity
-                    style={[s.btn, { backgroundColor: c.color }]}
-                    onPress={() => Linking.openURL(`tel:${c.number}`)}
-                  >
-                    <Text style={s.btnTxt}>Call Now</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </ScrollView>
-          )}
+  const closeSheet = () => {
+    sheetOpenRef.current = false;
+    setSheetOpen(false);
+    Animated.spring(sheetTransY, {
+      toValue: SHEET_HEIGHT, useNativeDriver: true, bounciness: 4,
+    }).start();
+  };
 
-          {activeTab === "hospitals" && (
-            <Text style={s.empty}>Safe locations visible in the mobile app</Text>
-          )}
-        </View>
+  const toggleSheet = () => (sheetOpenRef.current ? closeSheet() : openSheet());
 
-        <Navbar />
-      </SafeAreaView>
-    );
-  }
-  // ────────────────────────────────────────────────────────────────────────────
+  // ── PanResponder: drag handle down to close ────────────────────────────
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder:  (_, g) => Math.abs(g.dy) > 8,
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) sheetTransY.setValue(g.dy); // only allow dragging down
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 60 || g.vy > 0.4) {
+          closeSheet();
+        } else {
+          // snap back open
+          Animated.spring(sheetTransY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
+        }
+      },
+    })
+  ).current;
 
+  // ── Loading / web ──────────────────────────────────────────────────────
   if (loading || !location) {
     return (
       <View style={s.loader}>
         <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={s.loaderText}>Locating you…</Text>
+        <Text style={s.loaderTxt}>Locating you…</Text>
       </View>
     );
   }
 
+  if (isWeb) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: "#fff" }}>
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+          <Text style={{ color: "#555", fontSize: 15 }}>Map available in Expo Go only</Text>
+        </View>
+        <Navbar />
+      </SafeAreaView>
+    );
+  }
+
+  // ── Main render ────────────────────────────────────────────────────────
   return (
-    <SafeAreaView style={s.root}>
+    <View style={s.root}>
 
-      {/* MAP */}
-      <View style={s.mapWrap}>
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_DEFAULT}
-          style={StyleSheet.absoluteFill}
-          customMapStyle={DARK_MAP_STYLE}
-          initialRegion={{
-            latitude: location.latitude,
-            longitude: location.longitude,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          }}
-          showsUserLocation
-          showsMyLocationButton
-          showsCompass
-          showsScale
-          loadingEnabled
-          loadingIndicatorColor="#007AFF"
-          loadingBackgroundColor="#1a1a2e"
-        >
-          {/* User marker */}
-          <Marker
-            coordinate={location}
-            title="Your Location"
-            pinColor="#007AFF"
-          />
-
-          {/* Danger zone circle */}
-          {danger && (
-            <Circle
-              center={location}
-              radius={DANGER_RADIUS}
-              strokeColor="rgba(255, 0, 0, 0.5)"
-              fillColor="rgba(255, 0, 0, 0.15)"
-              strokeWidth={2}
-            />
-          )}
-
-          {/* Evacuation route */}
-          {routeCoords.length > 0 && (
-            <Polyline
-              coordinates={routeCoords}
-              strokeColor="#007AFF"
-              strokeWidth={4}
-              lineDashPattern={[12, 8]}
-            />
-          )}
-
-          {/* Safe place marker */}
-          {safePlace && (
-            <Marker
-              coordinate={{ latitude: safePlace.lat, longitude: safePlace.lon }}
-              title={safePlace.name}
-              description="Safe evacuation point"
-              pinColor="#34C759"
-            />
-          )}
-
-          {/* Hospital/shelter markers */}
-          {places.slice(0, 3).map((place) => (
-            <Marker
-              key={place.id}
-              coordinate={{ latitude: place.lat, longitude: place.lon }}
-              title={place.name}
-              description="Tap to navigate"
-              pinColor="#FF9500"
-              onCalloutPress={() => openNavigation(place.lat, place.lon)}
-            />
-          ))}
-        </MapView>
+      {/* ── FULL-SCREEN MAP ── */}
+      <MapView
+        ref={mapRef}
+        provider={PROVIDER_DEFAULT}
+        style={StyleSheet.absoluteFill}
+        customMapStyle={DARK_MAP_STYLE}
+        initialRegion={{
+          latitude:       location.latitude,
+          longitude:      location.longitude,
+          latitudeDelta:  0.04,
+          longitudeDelta: 0.04,
+        }}
+        showsUserLocation
+        showsMyLocationButton
+        showsCompass
+        showsScale
+        loadingEnabled
+        loadingIndicatorColor="#007AFF"
+        loadingBackgroundColor="#1a1a2e"
+      >
+        <Marker coordinate={location} title="You" pinColor="#007AFF" />
 
         {danger && (
-          <View style={s.dangerPill}>
-            <View style={s.dangerDot} />
-            <Text style={s.dangerPillText}>DANGER ZONE ACTIVE</Text>
-          </View>
+          <Circle
+            center={location}
+            radius={DANGER_RADIUS}
+            strokeColor="rgba(255,59,48,0.65)"
+            fillColor="rgba(255,59,48,0.12)"
+            strokeWidth={2}
+          />
         )}
 
-        {safePlace && routeCoords.length > 0 && (
-          <View style={s.routeInfo}>
-            <View style={s.routeInfoRow}>
-              <View style={s.routeInfoIcon}>
-                <Text style={s.routeInfoIconText}>→</Text>
-              </View>
-              <View style={s.routeInfoContent}>
-                <Text style={s.routeInfoTitle}>{safePlace.name}</Text>
-                <Text style={s.routeInfoSub}>Route calculated</Text>
-              </View>
-            </View>
-          </View>
+        {routeCoords.length > 0 && (
+          <Polyline coordinates={routeCoords} strokeColor="#2196F3" strokeWidth={5} />
         )}
-      </View>
 
-      {/* BOTTOM PANEL */}
-      <View style={s.panel}>
+        {waypoints.map((wp, i) => (
+          <Marker key={`wp-${i}`} coordinate={wp} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={s.wpDot} />
+          </Marker>
+        ))}
 
+        {selectedPlace && (
+          <Marker
+            coordinate={{ latitude: selectedPlace.lat, longitude: selectedPlace.lon }}
+            title={selectedPlace.name}
+            pinColor={placeColor(selectedPlace.type)}
+          />
+        )}
+
+        {places.map((p) => (
+          <Marker
+            key={p.id}
+            coordinate={{ latitude: p.lat, longitude: p.lon }}
+            title={p.name}
+            description={`${placeLabel(p.type)} — tap to route`}
+            pinColor={placeColor(p.type)}
+            onCalloutPress={() => navigateTo(p)}
+          />
+        ))}
+      </MapView>
+
+      {/* ── DANGER PILL ── */}
+      {danger && (
+        <Animated.View
+          style={[s.dangerPill, { transform: [{ scale: pulseAnim }] }]}
+          pointerEvents="none"
+        >
+          <View style={s.dangerDot} />
+          <Text style={s.dangerPillTxt}>DANGER ZONE ACTIVE</Text>
+        </Animated.View>
+      )}
+
+      {/* ── DESTINATION CARD ── */}
+      {selectedPlace && routeCoords.length > 0 && (
+        <View style={[s.destCard, danger && { top: 108 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.destName} numberOfLines={1}>{selectedPlace.name}</Text>
+            <Text style={s.destDist}>
+              {placeLabel(selectedPlace.type)}  ·  {fmtDist(getDistance(location.latitude, location.longitude, selectedPlace.lat, selectedPlace.lon))} away
+            </Text>
+          </View>
+          <TouchableOpacity style={s.destClose} onPress={clearRoute}>
+            <Text style={s.destCloseX}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── TOGGLE BUTTON — always on top, inside sheet when open ── */}
+      <TouchableOpacity
+        style={[s.toggleBtn, sheetOpen && s.toggleBtnInsideSheet]}
+        onPress={toggleSheet}
+        activeOpacity={0.85}
+      >
+        <Text style={s.toggleChevron}>{sheetOpen ? "▼" : "▲"}</Text>
+        <Text style={s.toggleLabel}>{sheetOpen ? "Close" : "Nearby & Contacts"}</Text>
+      </TouchableOpacity>
+
+      {/* ── BOTTOM SHEET ── */}
+      <Animated.View
+        style={[s.sheet, { transform: [{ translateY: sheetTransY }] }]}
+      >
+        {/* Drag handle — also tap to close */}
+        <View {...panResponder.panHandlers} style={s.handleWrap}>
+          <View style={s.handle} />
+        </View>
+
+        {/* Tabs */}
         <View style={s.tabBar}>
           <TouchableOpacity
-            onPress={() => setActiveTab("hospitals")}
-            style={[s.tabBtn, activeTab === "hospitals" && s.tabBtnOn]}
+            style={[s.tabBtn, activeTab === "nearby" && s.tabBtnOn]}
+            onPress={() => setActiveTab("nearby")}
           >
-            <Text style={[s.tabTxt, activeTab === "hospitals" && s.tabTxtOn]}>
-              Safe Locations
-            </Text>
+            <Text style={[s.tabTxt, activeTab === "nearby" && s.tabTxtOn]}>Nearby Places</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={() => setActiveTab("contacts")}
             style={[s.tabBtn, activeTab === "contacts" && s.tabBtnOn]}
+            onPress={() => setActiveTab("contacts")}
           >
-            <Text style={[s.tabTxt, activeTab === "contacts" && s.tabTxtOn]}>
-              Emergency Contacts
-            </Text>
+            <Text style={[s.tabTxt, activeTab === "contacts" && s.tabTxtOn]}>Emergency</Text>
           </TouchableOpacity>
         </View>
 
-        {activeTab === "hospitals" && (
-          <ScrollView showsVerticalScrollIndicator={false}>
-            {places.length === 0
-              ? <Text style={s.empty}>No safe locations found nearby</Text>
-              : places.map((item, i) => (
-                  <View key={item.id} style={s.row}>
-                    <View style={s.rowL}>
-                      <View style={s.numBadge}>
-                        <Text style={s.numText}>{i + 1}</Text>
-                      </View>
-                      <View style={s.rowMid}>
-                        <Text style={s.rowTitle} numberOfLines={1}>{item.name}</Text>
-                        <Text style={s.rowSub}>
-                          {(getDistance(location!.latitude, location!.longitude, item.lat, item.lon) / 1000).toFixed(1)} km away
-                        </Text>
-                      </View>
+        {/* ── Nearby tab ── */}
+        {activeTab === "nearby" && (
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+            {places.length === 0 ? (
+              <View style={{ alignItems: "center", paddingVertical: 30 }}>
+                <ActivityIndicator color="#007AFF" />
+                <Text style={s.emptyTxt}>Searching nearby places…</Text>
+              </View>
+            ) : (
+              places.map((item, i) => {
+                const dist     = getDistance(location.latitude, location.longitude, item.lat, item.lon);
+                const isActive = selectedPlace?.id === item.id;
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[s.placeRow, isActive && s.placeRowActive]}
+                    onPress={() => navigateTo(item)}
+                    activeOpacity={0.75}
+                  >
+                    {/* Index number */}
+                    <View style={s.indexBadge}>
+                      <Text style={s.indexTxt}>{i + 1}</Text>
                     </View>
-                    <TouchableOpacity 
-                      style={s.btn} 
-                      onPress={() => openNavigation(item.lat, item.lon, item.name)}
-                    >
-                      <Text style={s.btnTxt}>Navigate</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))
-            }
+
+                    {/* Info */}
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.placeName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={s.placeMeta}>
+                        {placeLabel(item.type)}
+                        {"  ·  "}
+                        {fmtDist(dist)}
+                      </Text>
+                    </View>
+
+                    {/* Route pill */}
+                    <View style={[
+                      s.routePill,
+                      { backgroundColor: isActive ? "#1C1C1E" : "#F3F4F6" },
+                    ]}>
+                      <Text style={[s.routePillTxt, { color: isActive ? "#fff" : "#1C1C1E" }]}>
+                        {isActive ? "On Route" : "Route"}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
+            )}
           </ScrollView>
         )}
 
+        {/* ── Contacts tab ── */}
         {activeTab === "contacts" && (
-          <ScrollView showsVerticalScrollIndicator={false}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
             {EMERGENCY_CONTACTS.map((c) => (
-              <View key={c.id} style={s.row}>
-                <View style={s.rowL}>
-                  <View style={[s.iconBox, { backgroundColor: c.color + "15" }]}>
-                    <View style={[s.iconDot, { backgroundColor: c.color }]} />
-                  </View>
-                  <View style={s.rowMid}>
-                    <Text style={s.rowTitle}>{c.label}</Text>
-                    <Text style={[s.rowSub, { color: c.color, fontWeight: "600" }]}>{c.number}</Text>
-                  </View>
+              <View key={c.id} style={s.contactRow}>
+                {/* Colored left bar */}
+                <View style={[s.contactBar, { backgroundColor: c.color }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={s.contactLabel}>{c.label}</Text>
+                  <Text style={s.contactNum}>{c.number}</Text>
                 </View>
                 <TouchableOpacity
-                  style={[s.btn, { backgroundColor: c.color }]}
-                  onPress={() => callNumber(c.number)}
+                  style={s.callBtn}
+                  onPress={() => Linking.openURL(`tel:${c.number}`)}
                 >
-                  <Text style={s.btnTxt}>Call Now</Text>
+                  <Text style={s.callBtnTxt}>Call</Text>
                 </TouchableOpacity>
               </View>
             ))}
           </ScrollView>
         )}
+      </Animated.View>
 
-      </View>
-
-      <Navbar />
-    </SafeAreaView>
+      {/* ── NAVBAR ── */}
+      <SafeAreaView style={s.navbarWrap} edges={["bottom"]}>
+        <Navbar />
+      </SafeAreaView>
+    </View>
   );
 }
 
+// ── Styles ──────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "#F5F5F7" },
+  root:      { flex: 1, backgroundColor: "#000" },
+  loader:    { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#fff" },
+  loaderTxt: { marginTop: 12, fontSize: 15, color: "#888", fontWeight: "500" },
 
-  loader: { 
-    flex: 1, 
-    justifyContent: "center", 
-    alignItems: "center", 
-    backgroundColor: "#F5F5F7" 
-  },
-  loaderText: { 
-    marginTop: 12, 
-    fontSize: 15, 
-    color: "#6C757D", 
-    fontWeight: "500" 
-  },
-
-  mapWrap: {
-    height: SH * 0.58,
-    marginHorizontal: 20,
-    marginTop: 16,
-    borderRadius: 28,
-    overflow: "hidden",
-    elevation: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    backgroundColor: "#1a1a2e",
-    borderWidth: 1,
-    borderColor: "rgba(0, 0, 0, 0.06)",
-  },
-  
+  // Danger pill
   dangerPill: {
-    position: "absolute",
-    top: 24, 
-    left: 24,
+    position: "absolute", top: 56, left: 18,
     backgroundColor: "#FF3B30",
-    borderRadius: 24,
-    paddingHorizontal: 20, 
-    paddingVertical: 12,
-    elevation: 8,
-    shadowColor: "#FF3B30",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
+    borderRadius: 26, paddingHorizontal: 18, paddingVertical: 11,
+    flexDirection: "row", alignItems: "center", gap: 8,
+    elevation: 12,
+    shadowColor: "#FF3B30", shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.55, shadowRadius: 10,
   },
-  dangerDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+  dangerDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#fff" },
+  dangerPillTxt: { color: "#fff", fontSize: 13, fontWeight: "800", letterSpacing: 0.6 },
+
+  // Destination card
+  destCard: {
+    position: "absolute", top: 56, right: 14, left: 14,
     backgroundColor: "#fff",
-    shadowColor: "#fff",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 4,
+    borderRadius: 16, paddingHorizontal: 16, paddingVertical: 12,
+    flexDirection: "row", alignItems: "center", gap: 12,
+    elevation: 10,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12, shadowRadius: 10,
   },
-  dangerPillText: { 
-    color: "#fff", 
-    fontSize: 14, 
-    fontWeight: "700", 
-    letterSpacing: 0.3,
+  destName:  { fontSize: 13, fontWeight: "700", color: "#111", letterSpacing: -0.2 },
+  destDist:  { fontSize: 11, color: "#888", marginTop: 2 },
+  destClose: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: "#F3F4F6", justifyContent: "center", alignItems: "center",
+  },
+  destCloseX: { color: "#666", fontSize: 13, fontWeight: "700" },
+
+  // Waypoint dot
+  wpDot: {
+    width: 10, height: 10, borderRadius: 5,
+    backgroundColor: "#2196F3", borderWidth: 2, borderColor: "#fff",
   },
 
-  routeInfo: {
+  // Toggle button — floats above sheet when closed, sits inside sheet top when open
+  toggleBtn: {
     position: "absolute",
-    bottom: 24,
-    left: 24,
-    right: 24,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    padding: 16,
-    elevation: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(0, 0, 0, 0.04)",
+    bottom: NAVBAR_H + 14,
+    alignSelf: "center",
+    backgroundColor: "#fff",
+    borderRadius: 30, paddingHorizontal: 22, paddingVertical: 12,
+    flexDirection: "row", alignItems: "center", gap: 8,
+    elevation: 14,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18, shadowRadius: 10,
+    zIndex: 99,
   },
-  routeInfoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
+  // When sheet is open, the button sticks just above the handle inside the sheet
+  toggleBtnInsideSheet: {
+    bottom: SHEET_HEIGHT - 20,
   },
-  routeInfoIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: "#007AFF",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-  },
-  routeInfoIconText: {
-    color: "#fff",
-    fontSize: 22,
-    fontWeight: "700",
-  },
-  routeInfoContent: {
-    flex: 1,
-  },
-  routeInfoTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#1C1C1E",
-    marginBottom: 3,
-    letterSpacing: -0.3,
-  },
-  routeInfoSub: {
-    fontSize: 13,
-    color: "#8E8E93",
-    fontWeight: "500",
+  toggleChevron: { fontSize: 13, color: "#1C1C1E", fontWeight: "800" },
+  toggleLabel:   { fontSize: 14, color: "#1C1C1E", fontWeight: "600", letterSpacing: -0.2 },
+
+  // Sheet
+  sheet: {
+    position: "absolute",
+    bottom: 0, left: 0, right: 0,
+    height: SHEET_HEIGHT,
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 18,
+    elevation: 20,
+    shadowColor: "#000", shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1, shadowRadius: 16,
+    zIndex: 50,
   },
 
-  panel: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-    marginHorizontal: 20,
-    marginTop: 16,
-    marginBottom: 90,
-    borderRadius: 28,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    elevation: 6,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(0, 0, 0, 0.04)",
+  handleWrap: { alignItems: "center", paddingVertical: 14 },
+  handle: {
+    width: 40, height: 5, borderRadius: 3, backgroundColor: "#E0E0E0",
   },
 
+  // Tabs
   tabBar: {
-    flexDirection: "row",
-    backgroundColor: "#F8F9FA",
-    borderRadius: 16,
-    padding: 4,
-    marginBottom: 16,
+    flexDirection: "row", backgroundColor: "#F3F4F6",
+    borderRadius: 12, padding: 4, marginBottom: 14,
   },
-  tabBtn: { 
-    flex: 1, 
-    paddingVertical: 12, 
-    borderRadius: 13, 
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tabBtnOn: {
-    backgroundColor: "#FFFFFF",
-    elevation: 3,
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-  },
-  tabTxt: { 
-    fontSize: 14, 
-    fontWeight: "600", 
-    color: "#8E8E93",
-    letterSpacing: -0.2,
-  },
-  tabTxtOn: { 
-    color: "#007AFF", 
-    fontWeight: "700",
-    letterSpacing: -0.2,
-  },
+  tabBtn:   { flex: 1, paddingVertical: 9, borderRadius: 10, alignItems: "center" },
+  tabBtnOn: { backgroundColor: "#fff", elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3 },
+  tabTxt:   { fontSize: 13, fontWeight: "600", color: "#999" },
+  tabTxtOn: { color: "#1C1C1E", fontWeight: "700" },
 
-  row: {
-    flexDirection: "row", 
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 16,
-    borderBottomWidth: 1, 
-    borderBottomColor: "#F5F5F7",
+  // Place row — clean, no emojis
+  placeRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 14, paddingHorizontal: 2,
+    borderBottomWidth: 1, borderBottomColor: "#F3F4F6", gap: 12,
   },
-  rowL: { 
-    flexDirection: "row", 
-    alignItems: "center", 
-    flex: 1, 
-    marginRight: 14, 
-    gap: 14,
+  placeRowActive: {
+    backgroundColor: "#F8F8F8",
+    borderRadius: 12, borderBottomWidth: 0,
+    paddingHorizontal: 10, marginBottom: 2,
   },
-  rowMid: { flex: 1 },
-  rowTitle: { 
-    fontSize: 14, 
-    fontWeight: "600", 
-    color: "#1C1C1E",
-    marginBottom: 3,
-    letterSpacing: -0.3,
+  indexBadge: {
+    width: 30, height: 30, borderRadius: 8,
+    backgroundColor: "#F3F4F6",
+    justifyContent: "center", alignItems: "center",
   },
-  rowSub: { 
-    fontSize: 12, 
-    color: "#8E8E93", 
-    fontWeight: "500",
-    letterSpacing: -0.1,
+  indexTxt:  { fontSize: 13, fontWeight: "700", color: "#1C1C1E" },
+  placeName: { fontSize: 13, fontWeight: "600", color: "#1C1C1E", letterSpacing: -0.2 },
+  placeMeta: { fontSize: 11, color: "#888", marginTop: 2 },
+  routePill: {
+    borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7,
   },
+  routePillTxt: { fontSize: 12, fontWeight: "700" },
 
-  numBadge: {
-    width: 36, 
-    height: 36, 
-    borderRadius: 12,
-    backgroundColor: "#007AFF",
-    justifyContent: "center", 
-    alignItems: "center", 
-    flexShrink: 0,
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
+  // Contact row — colored left bar, no emojis
+  contactRow: {
+    flexDirection: "row", alignItems: "center",
+    paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: "#F3F4F6", gap: 14,
   },
-  numText: { 
-    color: "#FFFFFF", 
-    fontSize: 14, 
-    fontWeight: "700",
-    letterSpacing: -0.2,
+  contactBar:   { width: 4, height: 36, borderRadius: 2 },
+  contactLabel: { fontSize: 13, fontWeight: "600", color: "#1C1C1E" },
+  contactNum:   { fontSize: 12, color: "#888", fontWeight: "500", marginTop: 2 },
+  callBtn: {
+    backgroundColor: "#1C1C1E",
+    borderRadius: 10, paddingHorizontal: 18, paddingVertical: 10,
   },
+  callBtnTxt: { color: "#fff", fontSize: 13, fontWeight: "700" },
 
-  iconBox: {
-    width: 44, 
-    height: 44, 
-    borderRadius: 14,
-    justifyContent: "center", 
-    alignItems: "center", 
-    flexShrink: 0,
-    borderWidth: 1,
-    borderColor: "rgba(0, 0, 0, 0.06)",
-  },
-  iconDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-  },
+  emptyTxt: { color: "#aaa", fontSize: 13, marginTop: 10 },
 
-  btn: {
-    backgroundColor: "#007AFF",
-    borderRadius: 14,
-    paddingHorizontal: 18, 
-    paddingVertical: 11, 
-    flexShrink: 0,
-    elevation: 3,
-    shadowColor: "#007AFF",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-  },
-  btnTxt: { 
-    color: "#FFFFFF", 
-    fontSize: 14, 
-    fontWeight: "700",
-    letterSpacing: -0.1,
-  },
-
-  empty: { 
-    textAlign: "center", 
-    color: "#8E8E93", 
-    fontSize: 15, 
-    paddingVertical: 40, 
-    fontWeight: "500",
-    letterSpacing: -0.2,
-  },
+  navbarWrap: { position: "absolute", bottom: 0, left: 0, right: 0 },
 });
 
-//done with Map Screens - Joel Pawar (AI Engineer )
+// done - Joel Pawar (AI Engineer)

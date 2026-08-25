@@ -31,6 +31,9 @@
         "projectId": "8155db33-2e04-49fc-b679-1ec1bf26876e"
       }
     },
-    "owner": "joelpawar"
+    "owner": "joelpawar",
+    "plugins": [
+      "expo-audio"
+    ]
   }
 }
