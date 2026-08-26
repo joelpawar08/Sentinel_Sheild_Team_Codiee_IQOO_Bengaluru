@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "DISHA",
+    "slug": "DISHA",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/icon.png",
+        "backgroundImage": "./assets/icon.png",
+        "monochromeImage": "./assets/icon.png"
+      },
+      "package": "com.joelpawar.DISHA"
+    },
+    "web": {
+      "favicon": "./assets/icon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "8155db33-2e04-49fc-b679-1ec1bf26876e"
+      }
+    },
+    "owner": "joelpawar",
+    "plugins": [
+      "expo-audio"
+    ]
+  }
+}
